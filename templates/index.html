@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ColdChain Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div>
+        <h1>ColdChain Dashboard</h1>
+        <p>Registro de usuarios, productos y telemetría del ESP32</p>
+      </div>
+
+      {% if user %}
+      <form method="post" action="/logout">
+        <button type="submit">Cerrar sesión</button>
+      </form>
+      {% endif %}
+    </header>
+
+    {% if error %}
+      <div class="alert error">{{ error }}</div>
+    {% endif %}
+
+    {% if success %}
+      <div class="alert success">{{ success }}</div>
+    {% endif %}
+
+    {% if not user %}
+      <section class="auth-grid">
+        <div class="panel">
+          <h2>Registro</h2>
+          <form method="post" action="/register" class="form">
+            <label>Usuario</label>
+            <input type="text" name="username" required>
+
+            <label>Contraseña</label>
+            <input type="password" name="password" required>
+
+            <button type="submit">Crear cuenta</button>
+          </form>
+        </div>
+
+        <div class="panel">
+          <h2>Ingreso</h2>
+          <form method="post" action="/login" class="form">
+            <label>Usuario</label>
+            <input type="text" name="username" required>
+
+            <label>Contraseña</label>
+            <input type="password" name="password" required>
+
+            <button type="submit">Entrar</button>
+          </form>
+        </div>
+      </section>
+    {% else %}
+      <section class="panel">
+        <h2>Registrar producto</h2>
+        <form method="post" action="/products/new" class="form grid-form">
+          <div>
+            <label>Nombre del producto</label>
+            <input type="text" name="product_name" placeholder="Vacuna lote A" required>
+          </div>
+
+          <div>
+            <label>Serial del producto</label>
+            <input type="text" name="product_serial" placeholder="SER-0001" required>
+          </div>
+
+          <div>
+            <label>device_id del ESP32</label>
+            <input type="text" name="device_id" placeholder="esp32-coldchain-001" required>
+          </div>
+
+          <div class="align-end">
+            <button type="submit">Guardar producto</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Mis productos</h2>
+
+        {% if products and products|length > 0 %}
+          <div class="product-list">
+            {% for p in products %}
+              <a class="product-card {% if selected_product and p.id == selected_product.id %}active{% endif %}"
+                 href="/?product_id={{ p.id }}">
+                <strong>{{ p.product_name }}</strong>
+                <span>Serial: {{ p.product_serial }}</span>
+                <span>Device: {{ p.device_id }}</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p>Aún no has registrado productos.</p>
+        {% endif %}
+      </section>
+
+      {% if selected_product %}
+      <section class="cards">
+        <article class="card">
+          <span>Producto seleccionado</span>
+          <strong>{{ selected_product.product_name }}</strong>
+        </article>
+        <article class="card">
+          <span>Serial</span>
+          <strong>{{ selected_product.product_serial }}</strong>
+        </article>
+        <article class="card">
+          <span>Device ID</span>
+          <strong>{{ selected_product.device_id }}</strong>
+        </article>
+        <article class="card">
+          <span>Última lectura</span>
+          <strong id="lastUpdate">--</strong>
+        </article>
+      </section>
+
+      <section class="grid">
+        <div class="panel">
+          <h2>Temperatura</h2>
+          <div class="big-value" id="temperatureValue">--</div>
+          <canvas id="tempChart"></canvas>
+        </div>
+
+        <div class="panel">
+          <h2>Humedad</h2>
+          <div class="big-value" id="humidityValue">--</div>
+          <canvas id="humChart"></canvas>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Últimas lecturas</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hora</th>
+                <th>Device</th>
+                <th>Temp (°C)</th>
+                <th>Humedad (%)</th>
+                <th>Batería</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <script>
+        const deviceId = "{{ selected_product.device_id }}";
+        let tempChart = null;
+        let humChart = null;
+
+        function formatTime(isoString) {
+          if (!isoString) return "--";
+          return new Date(isoString).toLocaleTimeString();
+        }
+
+        async function refreshDashboard() {
+          const latestRes = await fetch(`/api/latest?device_id=${encodeURIComponent(deviceId)}`);
+          const latest = await latestRes.json();
+
+          if (latest && latest.temperature !== null) {
+            document.getElementById("temperatureValue").textContent = `${Number(latest.temperature).toFixed(1)} °C`;
+            document.getElementById("humidityValue").textContent = `${Number(latest.humidity).toFixed(1)} %`;
+            document.getElementById("lastUpdate").textContent = formatTime(latest.created_at);
+          }
+
+          const historyRes = await fetch(`/api/history?device_id=${encodeURIComponent(deviceId)}&limit=100`);
+          const history = await historyRes.json();
+
+          const labels = history.map(item => formatTime(item.created_at));
+          const tempData = history.map(item => item.temperature);
+          const humData = history.map(item => item.humidity);
+
+          if (tempChart) tempChart.destroy();
+          if (humChart) humChart.destroy();
+
+          tempChart = new Chart(document.getElementById("tempChart"), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [{
+                label: "Temperatura °C",
+                data: tempData,
+                borderWidth: 2,
+                tension: 0.25
+              }]
+            },
+            options: {
+              responsive: true,
+              animation: false
+            }
+          });
+
+          humChart = new Chart(document.getElementById("humChart"), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [{
+                label: "Humedad %",
+                data: humData,
+                borderWidth: 2,
+                tension: 0.25
+              }]
+            },
+            options: {
+              responsive: true,
+              animation: false
+            }
+          });
+
+          document.getElementById("historyBody").innerHTML = history.slice().reverse().map(item => `
+            <tr>
+              <td>${formatTime(item.created_at)}</td>
+              <td>${item.device_id}</td>
+              <td>${Number(item.temperature).toFixed(1)}</td>
+              <td>${Number(item.humidity).toFixed(1)}</td>
+              <td>${item.battery ?? "--"}</td>
+              <td>${item.status ?? "--"}</td>
+            </tr>
+          `).join("");
+        }
+
+        refreshDashboard();
+        setInterval(refreshDashboard, 5000);
+      </script>
+      {% endif %}
+    {% endif %}
+  </div>
+</body>
+</html>

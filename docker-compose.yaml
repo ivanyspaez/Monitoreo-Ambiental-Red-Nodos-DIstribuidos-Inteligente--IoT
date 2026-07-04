@@ -1,0 +1,11 @@
+services:
+  web:
+    build: .
+    container_name: iot_coldchain_web
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      DATABASE_URL: sqlite:///./data/telemetry.db
+      MAX_HISTORY: 200
